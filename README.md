@@ -1,65 +1,44 @@
-# Jellyskip
+Jellyskip (Binge-Watching Edition)
+A modified and enhanced version of the service.jellyskip Kodi add-on.
 
-Skip Jellyfin media segments (intros/outros) in Kodi with a button prompt or automatically.
+This fork introduces a complete Netflix-style Binge-Watching experience for Jellyfin media segments (Intros & Outros) directly within Kodi. It seamlessly integrates with the default Estuary skin using native visual components.
 
-## Features
+✨ New Features in this Fork
+1. Smart Outro Handling (Next Episode / Quit)
+Instead of just offering to "Skip Outro" like the original add-on, reaching the end credits now prompts a split-button menu:
 
-- **Skip Button** - Shows a "Skip Intro" / "Skip Outro" button when entering a segment
-- **Auto Skip** - Automatically skip segments without interaction (with brief notification)
-- **Seek-back Detection** - Re-shows skip prompt when seeking back into a segment
+Next Episode: Skips the remaining credits and immediately plays the next file.
 
-## Requirements
+Quit: Stops playback and returns to the Kodi interface.
 
-- **Kodi 21 (Omega) or newer**
-- **Jellyfin for Kodi addon** - installed and configured
-- **Jellyfin server 10.9+** with [Intro Skipper plugin](https://github.com/intro-skipper/intro-skipper)
+2. Netflix-Style Auto-Play (Binge-Watching)
+If no action is taken during the Outro prompt, a dynamic countdown (default: 10s) will start. Once the countdown reaches zero:
 
-## Installation
+The add-on automatically jumps to the Next Episode.
 
-### Option 1: Add Repository Source (Recommended)
+A Binge Counter keeps track of consecutive auto-played episodes.
 
-No download required - add the repo URL directly in Kodi:
+If the limit (default: 3 episodes) is reached, the playback automatically stops to prevent endless streaming if you fall asleep.
 
-1. In Kodi: **Settings** → **File Manager** → **Add source**
-2. Click `<None>` and enter: `https://raw.githubusercontent.com/Andy2244/kodi-repo/main/zips/`
-3. Name it `Andy2244` and click **OK**
-4. Go to **Settings** → **Add-ons** → **Install from zip file**
-5. Select `Andy2244` → `repository.andy2244` → install the repository zip
-6. Go to **Install from repository** → **Andy2244's Repository** → **Services** → **Jellyskip**
-7. Click **Install**
+Any manual interaction (pressing a button or navigating) instantly resets the binge counter.
 
-### Option 2: Manual ZIP Download
+3. Fully Customizable via GUI
+You no longer need to edit the Python code to change the behavior. A new settings menu allows you to adjust:
 
-1. Download: [repository.andy2244.zip](https://github.com/Andy2244/kodi-repo/raw/main/zips/repository.andy2244/repository.andy2244-1.0.1.zip)
-2. In Kodi: **Settings** → **Add-ons** → **Install from zip file**
-3. Select the downloaded zip
-4. Then install Jellyskip from the repository
+Intro Display Time: How long the "Skip Intro" button stays on screen.
 
-> **CoreELEC/LibreELEC:** If installation fails, go to **Power** → **Restart Kodi** and try again.
+Outro Timeout: The countdown duration before auto-playing the next episode.
 
-## Settings
+Binge Limit: The maximum number of consecutive episodes played without user interaction before playback halts.
 
-Access via: **Settings** → **Add-ons** → **My add-ons** → **Services** → **Jellyskip** → **Configure**
+4. Estuary Skin Integration
+The dialogue menu has been completely rewritten in XML to match Kodi's default Estuary theme:
 
-| Setting | Description |
-|---------|-------------|
-| **Auto Skip** | Automatically skip segments without showing a button. Shows a brief notification instead. On initial playback, there's a 5-second delay to allow your TV to sync. |
+The "Next Episode" and "Quit" buttons are perfectly aligned and glued together in a clean, translucent pill shape.
 
-## Troubleshooting
+The blue focus texture wraps the text properly without cropping or deformation.
 
-### Skip button doesn't appear
-- Ensure [Intro Skipper plugin](https://github.com/intro-skipper/intro-skipper) is installed on your Jellyfin server
-- Check that media has detected segments (visible in Jellyfin web UI)
-- Verify Jellyfin for Kodi addon is configured and synced
-
-### Auto Skip not working after changing settings
-- Settings take effect immediately, no restart needed
-- If issues persist, restart Kodi
-
-## Credits
-
-Based on [SgtJalau/service.jellyskip](https://github.com/SgtJalau/service.jellyskip) with community improvements.
-
-## License
-
-GNU General Public License, v2
+🚀 Installation
+1. Go to the [Releases page](../../releases/latest) of this repository.
+2. Download the latest `service.jellyskip-x.x.x.zip` file from the Assets section.
+3. In Kodi, go to **Add-ons** > **Install from zip file** and select the downloaded archive.
