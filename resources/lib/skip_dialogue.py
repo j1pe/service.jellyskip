@@ -9,14 +9,9 @@ OK_BUTTON = 2101
 QUIT_BUTTON = 2102
 
 MIN_REMAINING_SECONDS = 5
-MAX_DISPLAY_SECONDS = 10  # Temps d'affichage max de l'intro
+BINGE_PROPERTY_KEY = "jellyskip_binge_count"
 
 LOG = LazyLogger(__name__)
-
-# --- PARAMÈTRES DE BINGE WATCHING ---
-MAX_BINGE_EPISODES = 3
-BINGE_TIMEOUT_SECONDS = 10
-BINGE_PROPERTY_KEY = "jellyskip_binge_count"
 
 class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
 
@@ -26,7 +21,23 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
         self.player = xbmc.Player()
         self.is_initial_play = is_initial_play
         self.play_start_time = play_start_time
-        self.is_closed = False  # Sécurité pour stopper la boucle du compteur
+        self.is_closed = False
+
+        addon = xbmcaddon.Addon('service.jellyskip')
+        try:
+            self.max_display_seconds = int(addon.getSetting('intro_display_time'))
+        except ValueError:
+            self.max_display_seconds = 10
+
+        try:
+            self.outro_timeout = int(addon.getSetting('outro_timeout'))
+        except ValueError:
+            self.outro_timeout = 10
+
+        try:
+            self.max_binge_episodes = int(addon.getSetting('max_binge_episodes'))
+        except ValueError:
+            self.max_binge_episodes = 3
 
     def onInit(self):
         autoskip = xbmcaddon.Addon('service.jellyskip').getSettingBool('autoskip')
@@ -64,12 +75,11 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
         segment_time_remaining = self.get_seconds_till_segment_end()
 
         if self.segment_type in ["Outro", "Credits"]:
-            display_time = BINGE_TIMEOUT_SECONDS
+            display_time = self.outro_timeout
         else:
-            display_time = min(segment_time_remaining, MAX_DISPLAY_SECONDS)
+            display_time = min(segment_time_remaining, self.max_display_seconds)
 
         if display_time > 0:
-            # On lance la boucle de mise à jour dynamique au lieu du simple délai
             utils.run_threaded(self.countdown_loop, delay=0, kwargs={'start_time': int(display_time)})
         else:
             utils.run_threaded(self.on_automatic_close, delay=15, kwargs={})
@@ -77,11 +87,10 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
     def countdown_loop(self, start_time):
         current_time = start_time
         
-        # Lecture de la mémoire pour l'Outro
         window = xbmcgui.Window(10000)
         current_count_str = window.getProperty(BINGE_PROPERTY_KEY)
         current_count = int(current_count_str) if current_count_str else 0
-        is_limit_reached = current_count >= MAX_BINGE_EPISODES
+        is_limit_reached = current_count >= self.max_binge_episodes
 
         while current_time > 0 and not self.is_closed:
             try:
@@ -94,9 +103,8 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
                 else:
                     skip_button.setLabel(f"Skip {self.segment_type} ({current_time}s)")
             except:
-                break  # Si la fenêtre a été détruite brutalement
+                break
 
-            # On attend 1 seconde en vérifiant 10 fois si l'utilisateur a fermé le menu
             for _ in range(10):
                 if self.is_closed:
                     break
@@ -104,7 +112,6 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
             
             current_time -= 1
 
-        # Si le temps arrive à zéro et que l'utilisateur n'a rien touché, on déclenche l'action auto
         if not self.is_closed:
             self.on_automatic_close()
 
@@ -120,14 +127,14 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
             current_count_str = window.getProperty(BINGE_PROPERTY_KEY)
             current_count = int(current_count_str) if current_count_str else 0
 
-            if current_count < MAX_BINGE_EPISODES:
+            if current_count < self.max_binge_episodes:
                 current_count += 1
                 window.setProperty(BINGE_PROPERTY_KEY, str(current_count))
                 xbmc.executebuiltin('PlayerControl(Next)')
             else:
                 self.reset_binge_counter()
                 self.player.stop()
-                xbmc.executebuiltin('Notification(Jellyskip, Lecture suspendue pour inactivité, 5000)')
+                xbmc.executebuiltin(f'Notification(Jellyskip, Lecture suspendue (Limite de {self.max_binge_episodes} épisodes), 5000)')
 
         self.close()
         xbmc.executebuiltin("NotifyAll(%s, %s, %s)" % ("service.jellyskip", "Jellyskip.DialogueClosed", {}))
