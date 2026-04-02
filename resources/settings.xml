@@ -1,10 +1,12 @@
 <?xml version="1.0" encoding="utf-8" standalone="yes"?>
 <settings>
-    <category label="30000">
-        <setting id="autoskip" type="bool" label="30001" default="false"/>
+    <category label="Général"> 
+        
+        <setting id="autoskip" type="bool" label="Saut automatique sans confirmation" default="false"/>
         
         <setting id="intro_display_time" type="number" label="Durée d'affichage bouton Intro (secondes)" default="10"/>
         <setting id="outro_timeout" type="number" label="Durée avant saut Épisode Suivant (secondes)" default="10"/>
         <setting id="max_binge_episodes" type="number" label="Nombre d'épisodes enchaînés avant arrêt" default="3"/>
+        
     </category>
 </settings>
