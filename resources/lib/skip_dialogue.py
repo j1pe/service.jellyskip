@@ -21,22 +21,25 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
         self.player = xbmc.Player()
         self.is_initial_play = is_initial_play
         self.play_start_time = play_start_time
+        
         self.is_closed = False
+        # Ce verrou empêche la télécommande Android de déclencher la touche 3 fois
+        self.action_taken = False 
 
         addon = xbmcaddon.Addon('service.jellyskip')
         try:
             self.max_display_seconds = int(addon.getSetting('intro_display_time'))
-        except ValueError:
+        except:
             self.max_display_seconds = 10
 
         try:
             self.outro_timeout = int(addon.getSetting('outro_timeout'))
-        except ValueError:
+        except:
             self.outro_timeout = 10
 
         try:
             self.max_binge_episodes = int(addon.getSetting('max_binge_episodes'))
-        except ValueError:
+        except:
             self.max_binge_episodes = 3
 
     def onInit(self):
@@ -112,14 +115,18 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
             
             current_time -= 1
 
-        if not self.is_closed:
+        # N'exécute le timer automatique que si on n'a pas déjà cliqué manuellement
+        if not self.is_closed and not self.action_taken:
             self.on_automatic_close()
 
     def reset_binge_counter(self):
-        window = xbmcgui.Window(10000)
-        window.clearProperty(BINGE_PROPERTY_KEY)
+        xbmcgui.Window(10000).clearProperty(BINGE_PROPERTY_KEY)
 
     def on_automatic_close(self):
+        if self.action_taken or self.is_closed:
+            return
+            
+        self.action_taken = True
         self.is_closed = True
         
         if self.segment_type in ["Outro", "Credits"] and self.player.isPlaying():
@@ -130,18 +137,21 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
             if current_count < self.max_binge_episodes:
                 current_count += 1
                 window.setProperty(BINGE_PROPERTY_KEY, str(current_count))
+                # On envoie la commande d'abord
                 xbmc.executebuiltin('PlayerControl(Next)')
             else:
                 self.reset_binge_counter()
                 self.player.stop()
                 xbmc.executebuiltin(f'Notification(Jellyskip, Lecture suspendue (Limite de {self.max_binge_episodes} épisodes), 5000)')
 
+        # Et on ferme la fenêtre ENSUITE
         self.close()
         xbmc.executebuiltin("NotifyAll(%s, %s, %s)" % ("service.jellyskip", "Jellyskip.DialogueClosed", {}))
 
     def onAction(self, action):
         if action in (ACTION_NAV_BACK, ACTION_PREVIOUS_MENU, ACTION_STOP):
             self.is_closed = True
+            self.action_taken = True
             self.reset_binge_counter()
             self.close()
 
@@ -152,6 +162,11 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
         pass
 
     def onClick(self, control):
+        # Si un clic est déjà en cours de traitement, on ignore les rebonds de la télécommande
+        if self.action_taken or self.is_closed:
+            return
+
+        self.action_taken = True
         self.is_closed = True
         
         if not self.player.isPlaying():
