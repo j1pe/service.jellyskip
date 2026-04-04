@@ -21,9 +21,8 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
         self.player = xbmc.Player()
         self.is_initial_play = is_initial_play
         self.play_start_time = play_start_time
-        
+
         self.is_closed = False
-        # Ce verrou empêche la télécommande Android de déclencher la touche 3 fois
         self.action_taken = False 
 
         addon = xbmcaddon.Addon('service.jellyskip')
@@ -89,7 +88,7 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
 
     def countdown_loop(self, start_time):
         current_time = start_time
-        
+
         window = xbmcgui.Window(10000)
         current_count_str = window.getProperty(BINGE_PROPERTY_KEY)
         current_count = int(current_count_str) if current_count_str else 0
@@ -112,23 +111,37 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
                 if self.is_closed:
                     break
                 xbmc.sleep(100)
-            
+
             current_time -= 1
 
-        # N'exécute le timer automatique que si on n'a pas déjà cliqué manuellement
         if not self.is_closed and not self.action_taken:
             self.on_automatic_close()
 
     def reset_binge_counter(self):
         xbmcgui.Window(10000).clearProperty(BINGE_PROPERTY_KEY)
 
+    def trigger_native_next(self):
+        """ 
+        Utilise l'API Python native de Kodi pour sauter à 2 secondes de la fin.
+        C'est 100% fiable sur Android et Windows. 
+        Jellyfin intercepte la fin naturelle de la vidéo et enchaîne l'épisode.
+        """
+        try:
+            total_time = self.player.getTotalTime()
+            if total_time > 3:
+                self.player.seekTime(total_time - 2)
+            else:
+                xbmc.executebuiltin('PlayerControl(Next)')
+        except Exception as e:
+            LOG.error(f"Erreur lors du saut: {e}")
+
     def on_automatic_close(self):
         if self.action_taken or self.is_closed:
             return
-            
+
         self.action_taken = True
         self.is_closed = True
-        
+
         if self.segment_type in ["Outro", "Credits"] and self.player.isPlaying():
             window = xbmcgui.Window(10000)
             current_count_str = window.getProperty(BINGE_PROPERTY_KEY)
@@ -137,14 +150,15 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
             if current_count < self.max_binge_episodes:
                 current_count += 1
                 window.setProperty(BINGE_PROPERTY_KEY, str(current_count))
-                # On envoie la commande d'abord
-                xbmc.executebuiltin('PlayerControl(Next)')
+                self.close()
+                xbmc.sleep(100)
+                self.trigger_native_next()
+                return
             else:
                 self.reset_binge_counter()
                 self.player.stop()
                 xbmc.executebuiltin(f'Notification(Jellyskip, Lecture suspendue (Limite de {self.max_binge_episodes} épisodes), 5000)')
 
-        # Et on ferme la fenêtre ENSUITE
         self.close()
         xbmc.executebuiltin("NotifyAll(%s, %s, %s)" % ("service.jellyskip", "Jellyskip.DialogueClosed", {}))
 
@@ -162,13 +176,12 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
         pass
 
     def onClick(self, control):
-        # Si un clic est déjà en cours de traitement, on ignore les rebonds de la télécommande
         if self.action_taken or self.is_closed:
             return
 
         self.action_taken = True
         self.is_closed = True
-        
+
         if not self.player.isPlaying():
             self.close()
             return
@@ -177,14 +190,17 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
 
         if control == OK_BUTTON:
             if self.segment_type in ["Outro", "Credits"]:
-                xbmc.executebuiltin('PlayerControl(Next)')
+                self.close()
+                xbmc.sleep(100)
+                self.trigger_native_next()
+                return
             else:
                 remaining_seconds = self.player.getTotalTime() - self.seek_time_seconds
                 if remaining_seconds < MIN_REMAINING_SECONDS:
                     self.player.seekTime(self.player.getTotalTime() - MIN_REMAINING_SECONDS)
                 else:
                     self.player.seekTime(self.seek_time_seconds)
-                    
+
         elif control == QUIT_BUTTON:
             self.player.stop()
 
