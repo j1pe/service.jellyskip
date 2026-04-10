@@ -1,5 +1,6 @@
 import xbmcgui, xbmc, xbmcaddon
 import time
+import threading
 from xbmcgui import ACTION_NAV_BACK, ACTION_PREVIOUS_MENU, ACTION_STOP
 
 import helper.utils as utils
@@ -10,6 +11,10 @@ QUIT_BUTTON = 2102
 
 MIN_REMAINING_SECONDS = 5
 BINGE_PROPERTY_KEY = "jellyskip_binge_count"
+
+# Durée de l'animation WindowClose dans le XML (slide 450ms + fade 350ms)
+# On attend la plus longue + marge de sécurité
+DIALOG_CLOSE_ANIMATION_MS = 500
 
 LOG = LazyLogger(__name__)
 
@@ -23,7 +28,7 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
         self.play_start_time = play_start_time
 
         self.is_closed = False
-        self.action_taken = False 
+        self.action_taken = False
 
         addon = xbmcaddon.Addon('service.jellyskip')
         try:
@@ -120,12 +125,170 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
     def reset_binge_counter(self):
         xbmcgui.Window(10000).clearProperty(BINGE_PROPERTY_KEY)
 
-    def trigger_native_next(self):
-        """ 
-        Utilise l'API Python native de Kodi pour sauter à 2 secondes de la fin.
-        C'est 100% fiable sur Android et Windows. 
-        Jellyfin intercepte la fin naturelle de la vidéo et enchaîne l'épisode.
+    def _wait_for_dialog_close(self):
         """
+        Attend que l'animation de fermeture du dialogue soit terminée.
+
+        ROOT CAUSE du bug : PlayerControl(Next) appelé pendant l'animation
+        de fermeture déclenche "ignoring action 14, topmost modal dialog
+        closing animation is running" — la commande est silencieusement ignorée.
+
+        Solution : attente active via xbmcgui.getCurrentWindowDialogId() jusqu'à
+        ce que notre fenêtre (id=9999) ne soit plus la fenêtre active, puis
+        délai supplémentaire pour l'animation résiduelle.
+        """
+        # Attente active : jusqu'à ce que le dialogue ne soit plus au premier plan
+        timeout = 30  # 3 secondes max
+        while timeout > 0:
+            try:
+                current_dialog_id = xbmcgui.getCurrentWindowDialogId()
+                if current_dialog_id != 9999:
+                    break
+            except Exception:
+                break
+            xbmc.sleep(100)
+            timeout -= 1
+
+        # Délai supplémentaire pour l'animation résiduelle (slide: 450ms, fade: 350ms)
+        xbmc.sleep(DIALOG_CLOSE_ANIMATION_MS)
+
+    def _get_next_episode_url(self):
+        """
+        Récupère l'URL plugin:// de l'épisode suivant via l'API Jellyfin.
+        Retourne None si introuvable.
+        """
+        try:
+            import json
+            import urllib.request
+            import xbmcvfs
+
+            # Lire la config jellyfin-kodi
+            data_path = xbmcvfs.translatePath(
+                "special://profile/addon_data/plugin.video.jellyfin/data.json"
+            )
+            with open(data_path, "rb") as f:
+                jf_config = json.load(f)
+
+            server  = jf_config["Servers"][0]["address"]
+            token   = jf_config["Servers"][0]["AccessToken"]
+            user_id = jf_config["Servers"][0].get("UserId", "")
+
+            headers = {
+                "Accept": "application/json",
+                "Authorization": f"MediaBrowser Token={token}",
+            }
+
+            # L'ID Jellyfin est stocké dans la window property par jellyfin-kodi
+            win = xbmcgui.Window(10000)
+            item_id = (win.getProperty("jellyfin_id")
+                       or win.getProperty("emby_id")
+                       or win.getProperty("jellyfinid"))
+
+            # Fallback : extraire l'ID depuis l'URL du fichier en lecture
+            if not item_id:
+                import re
+                try:
+                    playing_file = self.player.getPlayingFile()
+                    m = re.search(r'[?&]id=([a-f0-9]{32})', playing_file, re.I)
+                    if m:
+                        item_id = m.group(1)
+                except Exception:
+                    pass
+
+            if not item_id:
+                LOG.warning("[jellyskip] Could not find Jellyfin ItemId for next episode lookup")
+                return None
+
+            LOG.info(f"[jellyskip] Looking up next episode for item_id={item_id}")
+
+            # Récupérer SeriesId et IndexNumber de l'épisode en cours
+            req = urllib.request.Request(
+                f"{server}/Users/{user_id}/Items/{item_id}?Fields=SeriesId,SeasonId,IndexNumber,ParentIndexNumber",
+                headers=headers
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                item_info = json.load(resp)
+
+            series_id = item_info.get("SeriesId")
+            season_id = item_info.get("SeasonId")
+            index     = item_info.get("IndexNumber", 0)
+
+            if not series_id:
+                LOG.warning("[jellyskip] No SeriesId — not a TV episode?")
+                return None
+
+            # Stratégie A : NextUp (épisode suivant non vu)
+            req = urllib.request.Request(
+                f"{server}/Shows/NextUp?UserId={user_id}&SeriesId={series_id}&Limit=1&Fields=MediaSources",
+                headers=headers
+            )
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                next_up = json.load(resp)
+
+            next_items = next_up.get("Items", [])
+            if next_items:
+                next_id = next_items[0]["Id"]
+                LOG.info(f"[jellyskip] Next episode via NextUp API: {next_id}")
+                return f"plugin://plugin.video.jellyfin/?mode=play&id={next_id}"
+
+            # Stratégie B : épisode IndexNumber+1 dans la même saison
+            if season_id and index:
+                req = urllib.request.Request(
+                    f"{server}/Users/{user_id}/Items?ParentId={season_id}&SortBy=IndexNumber&SortOrder=Ascending&Fields=MediaSources",
+                    headers=headers
+                )
+                with urllib.request.urlopen(req, timeout=5) as resp:
+                    season_items = json.load(resp)
+
+                for ep in season_items.get("Items", []):
+                    if ep.get("IndexNumber") == index + 1:
+                        next_id = ep["Id"]
+                        LOG.info(f"[jellyskip] Next episode via season index: {next_id}")
+                        return f"plugin://plugin.video.jellyfin/?mode=play&id={next_id}"
+
+            LOG.info("[jellyskip] No next episode found in Jellyfin")
+            return None
+
+        except Exception as e:
+            LOG.error(f"[jellyskip] Error getting next episode URL: {e}")
+            return None
+
+    def trigger_next_episode(self):
+        """
+        Passe à l'épisode suivant.
+
+        CRITIQUE : toujours appelé dans un thread séparé APRÈS _wait_for_dialog_close(),
+        pour éviter "ignoring action 14, topmost modal dialog closing animation is running".
+
+        Stratégies en cascade :
+          1. PlayerControl(Next) si la playlist Kodi a un item suivant
+          2. Lecture directe via URL plugin://plugin.video.jellyfin (API Jellyfin)
+          3. Fallback : seek à total_time - 2s
+        """
+        # Attendre que l'animation de fermeture soit terminée — FIX PRINCIPAL
+        self._wait_for_dialog_close()
+
+        # --- Stratégie 1 : item suivant déjà dans la playlist Kodi ---
+        try:
+            playlist = xbmc.PlayList(xbmc.PLAYLIST_VIDEO)
+            pos  = playlist.getposition()
+            size = playlist.size()
+            if size > 1 and pos < size - 1:
+                LOG.info("[jellyskip] Next ep via PlayerControl(Next) — playlist has next item")
+                xbmc.executebuiltin("PlayerControl(Next)")
+                return
+        except Exception as e:
+            LOG.error(f"[jellyskip] Playlist check failed: {e}")
+
+        # --- Stratégie 2 : URL directe via API Jellyfin ---
+        next_url = self._get_next_episode_url()
+        if next_url:
+            LOG.info(f"[jellyskip] Next ep via direct URL: {next_url}")
+            self._deferred_play(next_url)
+            return
+
+        # --- Stratégie 3 : fallback original (seek fin de vidéo) ---
+        LOG.warning("[jellyskip] Fallback: seeking to end of video to trigger natural next")
         try:
             total_time = self.player.getTotalTime()
             if total_time > 3:
@@ -133,7 +296,36 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
             else:
                 xbmc.executebuiltin('PlayerControl(Next)')
         except Exception as e:
-            LOG.error(f"Erreur lors du saut: {e}")
+            LOG.error(f"[jellyskip] Fallback seek failed: {e}")
+
+    def _deferred_play(self, url):
+        """
+        Stop propre puis lecture avec attente active.
+        Indispensable sur Android où player.stop() est asynchrone.
+        """
+        player = xbmc.Player()
+
+        if player.isPlaying():
+            player.stop()
+
+        # Attente active que le player soit vraiment arrêté
+        timeout = 30  # 3 secondes max (30 × 100ms)
+        while player.isPlaying() and timeout > 0:
+            xbmc.sleep(100)
+            timeout -= 1
+
+        if timeout == 0:
+            LOG.warning("[jellyskip] Player did not stop cleanly after 3s, forcing play anyway")
+
+        # Délai de sécurité supplémentaire (décodeur HW Android)
+        xbmc.sleep(300)
+
+        # ListItem explicite — obligatoire sur Android
+        listitem = xbmcgui.ListItem(path=url)
+        listitem.setProperty('IsPlayable', 'true')
+
+        LOG.info(f"[jellyskip] _deferred_play: launching {url}")
+        player.play(item=url, listitem=listitem)
 
     def on_automatic_close(self):
         if self.action_taken or self.is_closed:
@@ -151,8 +343,9 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
                 current_count += 1
                 window.setProperty(BINGE_PROPERTY_KEY, str(current_count))
                 self.close()
-                xbmc.sleep(100)
-                self.trigger_native_next()
+                # trigger_next_episode() appelé dans un thread — il gère lui-même
+                # l'attente de fermeture de l'animation via _wait_for_dialog_close()
+                threading.Thread(target=self.trigger_next_episode, daemon=True).start()
                 return
             else:
                 self.reset_binge_counter()
@@ -191,8 +384,9 @@ class SkipSegmentDialogue(xbmcgui.WindowXMLDialog):
         if control == OK_BUTTON:
             if self.segment_type in ["Outro", "Credits"]:
                 self.close()
-                xbmc.sleep(100)
-                self.trigger_native_next()
+                # Lancer dans un thread pour ne pas bloquer le thread GUI
+                # trigger_next_episode() attend lui-même la fin de l'animation
+                threading.Thread(target=self.trigger_next_episode, daemon=True).start()
                 return
             else:
                 remaining_seconds = self.player.getTotalTime() - self.seek_time_seconds
