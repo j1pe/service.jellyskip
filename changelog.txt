@@ -1,8 +1,13 @@
-1.1.7
-- Fix double auto-skip after imprecise seek landing
-- Add minimum skip distance (5s) to prevent pointless micro-seeks
-- Buffering-aware debounce: wait for playback to resume before tracking
-- Guard against rapid seek race conditions
+1.3.1
+- Fix définitif "épisode suivant" : attente de fin d'animation de fermeture du dialogue
+  avant d'envoyer PlayerControl(Next) (corrige "ignoring action 14, topmost modal
+  dialog closing animation is running" visible dans les logs Kodi)
+- trigger_next_episode() toujours exécuté dans un thread séparé avec
+  _wait_for_dialog_close() pour garantir que la fenêtre est fermée
+- Stratégie en cascade : playlist Kodi → API Jellyfin → fallback seek
+
+1.2.2
+- Android Fix
 
 1.1.6
 - Fix stale segment data causing wrong skip times
